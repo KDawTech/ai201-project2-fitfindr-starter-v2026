@@ -1,33 +1,49 @@
-"""The three FitFindr tools required by Unit 3."""
+"""FitFindr tools — Unit 4 after-improvement version.
+
+The Unit 4 improvement hardens create_fit_card() with deterministic validation:
+it keeps the model's wording but guarantees 2-4 sentences and the selected
+item's price/platform facts.
+"""
 from __future__ import annotations
+
 import re
 import config
 from generate import generate
 from utils.data_loader import load_listings
 
 _STOPWORDS = {
-    "a","an","the","for","and","or","of","to","in","on","with","looking","want","find","me",
-    "size","under","below","less","than","please","something","item"
+    "a", "an", "the", "for", "and", "or", "of", "to", "in", "on", "with",
+    "looking", "want", "find", "me", "size", "under", "below", "less", "than",
+    "please", "something", "item",
 }
 
+
 def _tokens(text: str) -> set[str]:
-    return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if len(t) > 1 and t not in _STOPWORDS}
+    return {
+        t for t in re.findall(r"[a-z0-9]+", text.lower())
+        if len(t) > 1 and t not in _STOPWORDS
+    }
+
 
 def _size_match(requested: str | None, listing_size: str) -> bool:
-    if not requested: return True
+    if not requested:
+        return True
     req = requested.strip().lower()
-    if not req: return True
-    parts = re.findall(r"[a-z]+|\d+", listing_size.lower())
-    # clothing letters: M matches M and S/M or M/L, but not XL
-    if req in {"xxs","xs","s","m","l","xl","xxl","xxxl"}:
+    if not req:
+        return True
+    parts = re.findall(r"[a-z]+|\d+(?:\.5)?", listing_size.lower())
+    if req in {"xxs", "xs", "s", "m", "l", "xl", "xxl", "xxxl"}:
         return req in parts
-    # numeric shoe/waist size: require exact numeric token
-    if req.isdigit():
+    if re.fullmatch(r"\d+(?:\.5)?", req):
         return req in parts
     return req == listing_size.strip().lower()
 
-def search_listings(description: str, size: str | None = None, max_price: float | None = None) -> list[dict]:
-    """Return matching listing dicts, best keyword match first; [] when none match."""
+
+def search_listings(
+    description: str,
+    size: str | None = None,
+    max_price: float | None = None,
+) -> list[dict]:
     query = _tokens(description)
     ranked = []
     for listing in load_listings():
@@ -36,9 +52,13 @@ def search_listings(description: str, size: str | None = None, max_price: float 
         if not _size_match(size, str(listing["size"])):
             continue
         haystack = " ".join([
-            listing["title"], listing["description"], listing["category"],
-            " ".join(listing.get("style_tags", [])), " ".join(listing.get("colors", [])),
-            listing.get("brand") or "", listing.get("platform") or ""
+            listing["title"],
+            listing["description"],
+            listing["category"],
+            " ".join(listing.get("style_tags", [])),
+            " ".join(listing.get("colors", [])),
+            listing.get("brand") or "",
+            listing.get("platform") or "",
         ])
         words = _tokens(haystack)
         overlap = query & words
@@ -46,7 +66,6 @@ def search_listings(description: str, size: str | None = None, max_price: float 
             continue
         title_words = _tokens(listing["title"])
         score = len(overlap) + 1.5 * len(query & title_words)
-        # a full phrase appearing in title/description is a strong signal
         phrase = description.strip().lower()
         if phrase and phrase in haystack.lower():
             score += 4
@@ -54,14 +73,16 @@ def search_listings(description: str, size: str | None = None, max_price: float 
     ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
     return [item for _, _, item in ranked[: config.SEARCH_RESULT_LIMIT]]
 
+
 def _item_summary(item: dict) -> str:
     return (
         f"{item.get('title')} | ${item.get('price')} | size {item.get('size')} | "
-        f"colors {', '.join(item.get('colors', []))} | style {', '.join(item.get('style_tags', []))}"
+        f"colors {', '.join(item.get('colors', []))} | "
+        f"style {', '.join(item.get('style_tags', []))}"
     )
 
+
 def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
-    """Return a non-empty outfit suggestion; empty wardrobe gets general styling advice."""
     if not new_item:
         return "I need a selected item before I can suggest an outfit."
     items = wardrobe.get("items", []) if isinstance(wardrobe, dict) else []
@@ -79,18 +100,66 @@ Their saved wardrobe is empty. Give 2 practical general outfit ideas using commo
 Use pieces from this wardrobe by name when useful:
 {formatted}
 Keep it under 100 words and make the combinations specific."""
-    return generate(prompt, system="Give practical, specific styling advice. Do not invent wardrobe pieces when a wardrobe is provided.")
+    return generate(
+        prompt,
+        system="Give practical, specific styling advice. Do not invent wardrobe pieces when a wardrobe is provided.",
+    )
+
+
+def _price_label(value) -> str:
+    try:
+        number = float(value)
+        return f"${number:g}"
+    except (TypeError, ValueError):
+        return f"${value}"
+
+
+def _normalize_fit_card(text: str, outfit: str, new_item: dict) -> str:
+    """Keep the creative answer, but enforce criterion-4 facts and length."""
+    text = " ".join((text or "").split()).strip()
+    price = _price_label(new_item.get("price"))
+    platform = str(new_item.get("platform") or "the listing platform")
+
+    if not text:
+        return (
+            f"This {new_item.get('title')} is an easy thrift find with a strong everyday vibe. "
+            f"Style it with the suggested outfit and grab it for {price} on {platform}."
+        )
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    if not sentences:
+        sentences = [text]
+    if len(sentences) > 4:
+        sentences = sentences[:4]
+    if len(sentences) == 1:
+        sentences.append("The suggested outfit keeps the look wearable and specific.")
+
+    combined = " ".join(sentences)
+    needs_price = price.lower() not in combined.lower()
+    needs_platform = platform.lower() not in combined.lower()
+    if needs_price or needs_platform:
+        extras = []
+        if needs_price:
+            extras.append(price)
+        if needs_platform:
+            extras.append(platform)
+        last = sentences[-1].rstrip(".!? ")
+        sentences[-1] = f"{last} ({' on '.join(extras)})."
+
+    return " ".join(sentences)
+
 
 def create_fit_card(outfit: str, new_item: dict) -> str:
-    """Return a 2-4 sentence social caption; guard against missing outfit text."""
     if not outfit or not outfit.strip():
         return "I need an outfit suggestion before I can create a fit card."
     if not new_item:
         return "I need a selected item before I can create a fit card."
+
     prompt = f"""Write a 2-4 sentence thrift find caption someone would actually post.
 New item: {new_item.get('title')}
-Price: ${new_item.get('price')}
+Price: {_price_label(new_item.get('price'))}
 Platform: {new_item.get('platform')}
 Outfit idea: {outfit}
 Mention the item, its price exactly once, the platform exactly once, and the vibe. Keep it natural, not like a product listing."""
-    return generate(prompt, system="Write concise, lively social captions. No markdown headings.")
+    raw = generate(prompt, system="Write concise, lively social captions. No markdown headings.")
+    return _normalize_fit_card(raw, outfit, new_item)
