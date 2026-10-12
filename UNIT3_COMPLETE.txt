@@ -1,0 +1,10 @@
+UNIT 3 COMPLETE BUILD
+
+1. Create/activate .venv
+2. pip install -r requirements.txt
+3. Copy .env.example to .env and paste your Gemini API key
+4. python test.py
+5. python app.py ask 'vintage graphic tee under $30'
+6. Commit in stages if you are submitting to GitHub (the rubric asks for 4+ new commits).
+
+Do not commit .env.
